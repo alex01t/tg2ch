@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError
 
+
 def env(name: str, default: str | None = None) -> str:
     v = os.getenv(name, default)
     if v is None or v == "":
@@ -32,8 +33,12 @@ CHANNELS = [c.strip() for c in CHANNELS_RAW.split(",") if c.strip()]
 STORE_EMPTY = os.getenv("STORE_EMPTY", "0") == "1"
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("main")
 
 CREATE_DB_SQL = f"CREATE DATABASE IF NOT EXISTS {CH_DATABASE}"
 CREATE_TABLE_SQL = f"""
@@ -67,10 +72,12 @@ def ch_client():
         password=CH_PASSWORD,
     )
 
+
 async def ensure_clickhouse():
     client = ch_client()
     client.command(CREATE_DB_SQL)
     client.command(CREATE_TABLE_SQL)
+
 
 def normalize_channel_name(chat) -> str:
     # prefer username if exists, fallback to title/id
@@ -83,6 +90,7 @@ def normalize_channel_name(chat) -> str:
     if getattr(chat, "id", None):
         return str(chat.id)
     return "unknown"
+
 
 def get_last_timestamp(client, channel_name: str):
     query = (
@@ -102,11 +110,12 @@ def get_last_timestamp(client, channel_name: str):
         last_ts = last_ts.replace(tzinfo=timezone.utc)
     return last_ts.astimezone(timezone.utc)
 
-async def backfill_channel(tg, client_ch, entity):
+
+async def backfill_channel(tg, client_ch, entity, backfill_depth_days):
     channel_name = normalize_channel_name(entity)
     last_ts = get_last_timestamp(client_ch, channel_name)
     if last_ts is None:
-        start_time = datetime.now(timezone.utc) - timedelta(days=7)
+        start_time = datetime.now(timezone.utc) - timedelta(days=backfill_depth_days)
         logger.info("👉 Backfilling %s for last 7 days", channel_name)
     else:
         start_time = last_ts
@@ -196,13 +205,16 @@ async def main():
         ent = await tg.get_entity(c)
         entities.append(ent)
 
-    for ent in entities:
-        await backfill_channel(tg, client_ch, ent)
+    backfill_depth_days = int(os.getenv('TG_BACKFILL_DEPTH_DAYS', '7'))
+    if backfill_depth_days > 0:
+        for ent in entities:
+            await backfill_channel(tg, client_ch, ent, backfill_depth_days)
 
     @tg.on(events.NewMessage(chats=entities))
     async def handler(event):
         text = event.raw_text or ""
         if (not STORE_EMPTY) and (not text.strip()):
+            logger.info(f'➡️  empty - {event}')
             return
 
         ts = event.date

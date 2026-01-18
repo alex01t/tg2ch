@@ -34,6 +34,7 @@ services:
       TG_API_HASH: "${TG_API_HASH}"
       TG_SESSION_DIR: "/app/session"
       TG_2FA_PASSWORD: "${TG_2FA_PASSWORD}"
+      TG_BACKFILL_DEPTH_DAYS: "${TG_BACKFILL_DEPTH_DAYS}"
 
       # Comma-separated list of channels to listen to:
       # examples: "durov,telegram,SomePublicChannel"
