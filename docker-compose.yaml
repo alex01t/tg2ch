@@ -1,0 +1,54 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.11
+    container_name: ch
+    restart: "unless-stopped"
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    volumes:
+#      - ch_data:/var/lib/clickhouse
+      - ./data:/var/lib/clickhouse
+    environment:
+      CLICKHOUSE_USER: "${CLICKHOUSE_USER}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD}"
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "${CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+
+  tg2ch:
+    build:
+      context: .
+    container_name: tg2ch
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    restart: "unless-stopped"
+    environment:
+      # Telegram app from https://my.telegram.org
+      TG_API_ID: "${TG_API_ID}"
+      TG_API_HASH: "${TG_API_HASH}"
+      TG_SESSION_DIR: "/app/session"
+      TG_2FA_PASSWORD: "${TG_2FA_PASSWORD}"
+
+      # Comma-separated list of channels to listen to:
+      # examples: "durov,telegram,SomePublicChannel"
+      # (user must already be joined/subscribed)
+      TG_CHANNELS: "${TG_CHANNELS}"
+
+      # ClickHouse
+      CH_HOST: "clickhouse"
+      CH_PORT: "8123"
+      CH_USER: "${CLICKHOUSE_USER}"
+      CH_PASSWORD: "${CLICKHOUSE_PASSWORD}"
+      #
+      CH_DATABASE: "tg"
+      CH_TABLE: "channel_messages"
+      # Optional: only store non-empty text messages
+      STORE_EMPTY: "0"
+    volumes:
+      - ./app.py:/app/app.py
+      - ./session:/app/session
