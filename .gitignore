@@ -1,3 +1,3 @@
 .env
 /session/
-/data/
+/clickhouse/data/

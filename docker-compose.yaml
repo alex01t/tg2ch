@@ -1,5 +1,5 @@
 services:
-  clickhouse:
+  ch:
     image: clickhouse/clickhouse-server:25.11
     container_name: ch
     restart: "unless-stopped"
@@ -8,7 +8,8 @@ services:
       - "127.0.0.1:9000:9000"
     volumes:
 #      - ch_data:/var/lib/clickhouse
-      - ./data:/var/lib/clickhouse
+      - ./clickhouse/data:/var/lib/clickhouse
+      - ./clickhouse/config.d/custom.xml:/etc/clickhouse-server/config.d/custom.xml:ro
     environment:
       CLICKHOUSE_USER: "${CLICKHOUSE_USER}"
       CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD}"
@@ -24,7 +25,7 @@ services:
       context: .
     container_name: tg2ch
     depends_on:
-      clickhouse:
+      ch:
         condition: service_healthy
     restart: "unless-stopped"
     environment:
@@ -40,7 +41,7 @@ services:
       TG_CHANNELS: "${TG_CHANNELS}"
 
       # ClickHouse
-      CH_HOST: "clickhouse"
+      CH_HOST: "ch"
       CH_PORT: "8123"
       CH_USER: "${CLICKHOUSE_USER}"
       CH_PASSWORD: "${CLICKHOUSE_PASSWORD}"
