@@ -3,6 +3,7 @@ import qrcode
 import signal
 import asyncio
 import clickhouse_connect
+import logging
 from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError
@@ -29,6 +30,10 @@ CHANNELS_RAW = env("TG_CHANNELS", "")
 CHANNELS = [c.strip() for c in CHANNELS_RAW.split(",") if c.strip()]
 
 STORE_EMPTY = os.getenv("STORE_EMPTY", "0") == "1"
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
 CREATE_DB_SQL = f"CREATE DATABASE IF NOT EXISTS {CH_DATABASE}"
 CREATE_TABLE_SQL = f"""
@@ -100,10 +105,10 @@ async def backfill_channel(tg, client_ch, entity):
     last_ts = get_last_timestamp(client_ch, channel_name)
     if last_ts is None:
         start_time = datetime.now(timezone.utc) - timedelta(days=7)
-        print(f"Backfilling {channel_name} for last 7 days")
+        logger.info("Backfilling %s for last 7 days", channel_name)
     else:
         start_time = last_ts
-        print(f"Backfilling {channel_name} since {start_time.isoformat()}")
+        logger.info("Backfilling %s since %s", channel_name, start_time.isoformat())
 
     rows = []
     async for message in tg.iter_messages(entity, reverse=True, offset_date=start_time):
@@ -145,19 +150,19 @@ async def main():
     tg = TelegramClient(TG_SESSION_PATH, TG_API_ID, TG_API_HASH)
 
     await tg.connect()
-    print("Connected")
+    logger.info("Connected")
 
     if await tg.is_user_authorized():
-        print("Logged in")
+        logger.info("Logged in")
     else:
 
-        print("Generating QR code…")
+        logger.info("Generating QR code…")
         qr_login = await tg.qr_login()
 
         print_qr_ascii(qr_login.url)
 
-        print("Open Telegram app → Settings → Devices → Link Desktop Device")
-        print("Scan the QR code")
+        logger.info("Open Telegram app → Settings → Devices → Link Desktop Device")
+        logger.info("Scan the QR code")
 
         try:
             await qr_login.wait()
@@ -166,7 +171,7 @@ async def main():
             pw = env("TG_2FA_PASSWORD")
             await tg.sign_in(password=pw)
 
-        print("Logged in successfully")
+        logger.info("Logged in successfully")
 
 
     # Resolve channels upfront (ensures you’re subscribed and name is valid)
@@ -189,7 +194,7 @@ async def main():
             ts = ts.replace(tzinfo=timezone.utc)
         ts_utc = ts.astimezone(timezone.utc)
 
-        print(f'{event}')
+        logger.info("%s", event)
 
         row = [[ts_utc, normalize_channel_name(event.chat), text]]
 
@@ -200,9 +205,9 @@ async def main():
             column_names=["ts", "channel", "msg"],
         )
 
-    print(f"Listening to {len(entities)} channels: {', '.join(CHANNELS)}")
+    logger.info("Listening to %s channels: %s", len(entities), ", ".join(CHANNELS))
     await tg.run_until_disconnected()
-    print('Disconnected')
+    logger.info("Disconnected")
 
 if __name__ == "__main__":
     asyncio.run(main())
