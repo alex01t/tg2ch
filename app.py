@@ -107,10 +107,10 @@ async def backfill_channel(tg, client_ch, entity):
     last_ts = get_last_timestamp(client_ch, channel_name)
     if last_ts is None:
         start_time = datetime.now(timezone.utc) - timedelta(days=7)
-        logger.info("Backfilling %s for last 7 days", channel_name)
+        logger.info("👉 Backfilling %s for last 7 days", channel_name)
     else:
         start_time = last_ts
-        logger.info("Backfilling %s since %s", channel_name, start_time.isoformat())
+        logger.info("👉 Backfilling %s since %s", channel_name, start_time.isoformat())
 
     rows = []
     async for message in tg.iter_messages(entity, reverse=True, offset_date=start_time):
@@ -136,11 +136,26 @@ async def backfill_channel(tg, client_ch, entity):
             rows.clear()
 
     if rows:
+        logger.info(f"⏬ fetched {len(rows)} messages from {channel_name}")
         client_ch.insert(
             table=f"{CH_DATABASE}.{CH_TABLE}",
             data=rows,
             column_names=["ts", "channel", "msg"],
         )
+
+
+async def handle_term(tg):
+    loop = asyncio.get_running_loop()
+    stop = asyncio.Event()
+
+    def _term():
+        stop.set()
+
+    loop.add_signal_handler(signal.SIGTERM, _term)
+    loop.add_signal_handler(signal.SIGINT, _term)
+
+    await stop.wait()
+    await tg.disconnect()
 
 
 async def main():
@@ -175,7 +190,6 @@ async def main():
 
         logger.info("Logged in successfully")
 
-
     # Resolve channels upfront (ensures you’re subscribed and name is valid)
     entities = []
     for c in CHANNELS:
@@ -196,7 +210,7 @@ async def main():
             ts = ts.replace(tzinfo=timezone.utc)
         ts_utc = ts.astimezone(timezone.utc)
 
-        logger.info("%s", event)
+        logger.info(f"➡️  {normalize_channel_name(event.chat)} - {event.id} - {text}")
 
         row = [[ts_utc, normalize_channel_name(event.chat), text]]
 
@@ -207,7 +221,9 @@ async def main():
             column_names=["ts", "channel", "msg"],
         )
 
-    logger.info("Listening to %s channels: %s", len(entities), ", ".join(CHANNELS))
+    asyncio.create_task(handle_term(tg))
+
+    logger.info("✅ Listening to %s channels: %s", len(entities), ", ".join(CHANNELS))
     await tg.run_until_disconnected()
     logger.info("Disconnected")
 
