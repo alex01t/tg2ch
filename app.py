@@ -3,7 +3,7 @@ import qrcode
 import signal
 import asyncio
 import clickhouse_connect
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError
 
@@ -67,18 +67,73 @@ async def ensure_clickhouse():
     client.command(CREATE_DB_SQL)
     client.command(CREATE_TABLE_SQL)
 
-def normalize_channel_name(event) -> str:
+def normalize_channel_name(chat) -> str:
     # prefer username if exists, fallback to title/id
-    ch = getattr(event, "chat", None)
-    if ch is None:
+    if chat is None:
         return "unknown"
-    if getattr(ch, "username", None):
-        return f"@{ch.username}"
-    if getattr(ch, "title", None):
-        return ch.title
-    if getattr(ch, "id", None):
-        return str(ch.id)
+    if getattr(chat, "username", None):
+        return f"@{chat.username}"
+    if getattr(chat, "title", None):
+        return chat.title
+    if getattr(chat, "id", None):
+        return str(chat.id)
     return "unknown"
+
+def get_last_timestamp(client, channel_name: str):
+    query = (
+        f"SELECT max(ts) AS max_ts "
+        f"FROM {CH_DATABASE}.{CH_TABLE} "
+        "WHERE channel = %(channel)s"
+    )
+    result = client.query(query, parameters={"channel": channel_name})
+    if not result.result_rows:
+        return None
+    last_ts = result.result_rows[0][0]
+    if last_ts is None:
+        return None
+    if last_ts.tzinfo is None:
+        last_ts = last_ts.replace(tzinfo=timezone.utc)
+    return last_ts.astimezone(timezone.utc)
+
+async def backfill_channel(tg, client_ch, entity):
+    channel_name = normalize_channel_name(entity)
+    last_ts = get_last_timestamp(client_ch, channel_name)
+    if last_ts is None:
+        start_time = datetime.now(timezone.utc) - timedelta(days=7)
+        print(f"Backfilling {channel_name} for last 7 days")
+    else:
+        start_time = last_ts
+        print(f"Backfilling {channel_name} since {start_time.isoformat()}")
+
+    rows = []
+    async for message in tg.iter_messages(entity, reverse=True, offset_date=start_time):
+        text = message.raw_text or ""
+        if (not STORE_EMPTY) and (not text.strip()):
+            continue
+
+        ts = message.date
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        ts_utc = ts.astimezone(timezone.utc)
+
+        if last_ts is not None and ts_utc <= last_ts:
+            continue
+
+        rows.append([ts_utc, channel_name, text])
+        if len(rows) >= 1000:
+            client_ch.insert(
+                table=f"{CH_DATABASE}.{CH_TABLE}",
+                data=rows,
+                column_names=["ts", "channel", "msg"],
+            )
+            rows.clear()
+
+    if rows:
+        client_ch.insert(
+            table=f"{CH_DATABASE}.{CH_TABLE}",
+            data=rows,
+            column_names=["ts", "channel", "msg"],
+        )
 
 
 async def main():
@@ -120,6 +175,9 @@ async def main():
         ent = await tg.get_entity(c)
         entities.append(ent)
 
+    for ent in entities:
+        await backfill_channel(tg, client_ch, ent)
+
     @tg.on(events.NewMessage(chats=entities))
     async def handler(event):
         text = event.raw_text or ""
@@ -133,7 +191,7 @@ async def main():
 
         print(f'{event}')
 
-        row = [[ts_utc, normalize_channel_name(event), text]]
+        row = [[ts_utc, normalize_channel_name(event.chat), text]]
 
         # Insert
         client_ch.insert(
