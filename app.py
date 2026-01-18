@@ -86,14 +86,16 @@ def normalize_channel_name(chat) -> str:
 
 def get_last_timestamp(client, channel_name: str):
     query = (
-        f"SELECT max(ts) AS max_ts "
+        f"SELECT max(ts) AS max_ts, count() AS row_count "
         f"FROM {CH_DATABASE}.{CH_TABLE} "
         "WHERE channel = %(channel)s"
     )
     result = client.query(query, parameters={"channel": channel_name})
     if not result.result_rows:
         return None
-    last_ts = result.result_rows[0][0]
+    last_ts, row_count = result.result_rows[0]
+    if row_count == 0:
+        return None
     if last_ts is None:
         return None
     if last_ts.tzinfo is None:
